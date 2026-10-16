@@ -73,6 +73,10 @@ The DLLs need `libwinpthread-1.dll`. Foundation already ships one in its folder.
 - The custom build includes only Mesa's d3d12 driver, not the llvmpipe CPU renderer.
 - Game, CrossOver or macOS updates may change things.
 
+## Support
+
+If this saved your village, you can [buy me a coffee on Ko-fi](https://ko-fi.com/megansweeting). Bug reports and results from other Macs are just as welcome: open an issue.
+
 ## Licenses
 
 - Mesa is MIT-licensed. See `LICENSE-MESA.rst`. The release DLLs are built from the official Mesa 26.2.4 source plus `patches/`.
