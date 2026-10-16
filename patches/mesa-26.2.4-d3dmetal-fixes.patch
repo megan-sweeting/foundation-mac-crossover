@@ -1,0 +1,80 @@
+--- a/src/gallium/drivers/d3d12/d3d12_draw.cpp
++++ b/src/gallium/drivers/d3d12/d3d12_draw.cpp
+@@ -1248,8 +1248,20 @@
+    if (indirect) {
+       unsigned draw_count = draw_auto ? 1 : indirect->draw_count;
+       ID3D12CommandSignature *cmd_sig = d3d12_get_cmd_signature(ctx, &cmd_sig_key);
+-      ctx->cmdlist->ExecuteIndirect(cmd_sig, draw_count, indirect_arg_buf,
+-         indirect_arg_offset, indirect_count_buf, indirect_count_offset);
++      /* D3DMetal (Apple's D3D12-on-Metal) draws nothing for a tessellated multi-draw
++       * with more than 16 commands, so split those into chunks it can handle. */
++      static const unsigned patch_chunk = debug_get_num_option("D3D12_PATCH_MDI_CHUNK", 16);
++      if (dinfo->mode == MESA_PRIM_PATCHES && !indirect_count_buf && patch_chunk &&
++          draw_count > patch_chunk) {
++         for (unsigned first = 0; first < draw_count; first += patch_chunk) {
++            unsigned n = MIN2(patch_chunk, draw_count - first);
++            ctx->cmdlist->ExecuteIndirect(cmd_sig, n, indirect_arg_buf,
++               indirect_arg_offset + (uint64_t)first * cmd_sig_key.multi_draw_stride, nullptr, 0);
++         }
++      } else {
++         ctx->cmdlist->ExecuteIndirect(cmd_sig, draw_count, indirect_arg_buf,
++            indirect_arg_offset, indirect_count_buf, indirect_count_offset);
++      }
+    } else {
+       if (dinfo->index_size > 0)
+          ctx->cmdlist->DrawIndexedInstanced(draws[0].count, dinfo->instance_count,
+--- a/src/mesa/main/light.c
++++ b/src/mesa/main/light.c
+@@ -1245,7 +1245,9 @@
+    init_lightmodel( &ctx->Light.Model );
+    init_material( &ctx->Light.Material );
+    ctx->Light.ShadeModel = GL_SMOOTH;
+-   ctx->Light.ProvokingVertex = GL_LAST_VERTEX_CONVENTION_EXT;
++   /* Default to first-vertex: with the D3D12 driver on D3DMetal, last-vertex flat
++    * varyings make draws disappear. */
++   ctx->Light.ProvokingVertex = GL_FIRST_VERTEX_CONVENTION_EXT;
+    ctx->Light.Enabled = GL_FALSE;
+    ctx->Light.ColorMaterialFace = GL_FRONT_AND_BACK;
+    ctx->Light.ColorMaterialMode = GL_AMBIENT_AND_DIFFUSE;
+--- a/src/gallium/drivers/d3d12/d3d12_screen.cpp
++++ b/src/gallium/drivers/d3d12/d3d12_screen.cpp
+@@ -412,7 +412,7 @@
+ 
+    /* Picking a value in line with other drivers. Without this, we can end up easily hitting OOM
+     * if an app just creates, initializes, and destroys resources without explicitly flushing. */
+-   caps->max_texture_upload_memory_budget = 64 * 1024 * 1024;
++   caps->max_texture_upload_memory_budget = 512 * 1024 * 1024;
+ 
+    caps->sampler_view_target = screen->opts12.RelaxedFormatCastingSupported;
+ 
+--- a/src/gallium/winsys/d3d12/wgl/d3d12_wgl_framebuffer.cpp
++++ b/src/gallium/winsys/d3d12/wgl/d3d12_wgl_framebuffer.cpp
+@@ -31,6 +31,7 @@
+ #include <wrl.h>
+ #include <dxguids/dxguids.h>
+ 
++#include "util/u_debug.h"
+ #include "util/u_memory.h"
+ #include "util/u_inlines.h"
+ #include "frontend/api.h"
+@@ -163,7 +164,10 @@
+    desc.Width = templ->width0;
+    desc.Height = templ->height0;
+    desc.SampleDesc.Count = 1;
+-   desc.AlphaMode = util_format_has_alpha(templ->format) ?
++   /* DirectComposition (used for alpha swapchains) doesn't work under Wine/CrossOver and
++    * leaves a white window, so use a plain HWND swapchain unless asked otherwise. */
++   static const bool use_dcomp_alpha = debug_get_bool_option("D3D12_SWAPCHAIN_ALPHA", false);
++   desc.AlphaMode = (use_dcomp_alpha && util_format_has_alpha(templ->format)) ?
+       DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE_IGNORE;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    desc.Scaling = DXGI_SCALING_STRETCH;
+@@ -303,7 +307,7 @@
+       framebuffer->offscreen_buffer = screen->base.base.resource_create(&screen->base.base, &local_templ);
+    }
+ 
+-   framebuffer->need_fillrect = util_format_has_alpha(templ->format);
++   framebuffer->need_fillrect = desc.AlphaMode != DXGI_ALPHA_MODE_IGNORE;
+ }
+ 
+ static bool
