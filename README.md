@@ -28,6 +28,8 @@ Two D3DMetal problems made parts of the game invisible on that path, and a third
 | No ground (sky shows through, no paths, villagers float) | `glMultiDrawElementsIndirect` with tessellation patches draws nothing once a single call holds roughly 30 or more commands | Such calls are split into chunks of 16 (`D3D12_PATCH_MDI_CHUNK`) |
 | Blank white window (or, with Mesa's `wgl_require_gdi_compat` workaround, screen tearing) | For pixel formats with alpha, Mesa presents through DirectComposition, which doesn't work under Wine/CrossOver. The GDI-compatible workaround copies frames into the window without VSync. | Always present through a plain window swap chain (opt back in with `D3D12_SWAPCHAIN_ALPHA=1`), so VSync works and there's no tearing |
 
+It also fixes a memory leak in Mesa's d3d12 driver itself (not D3DMetal-specific): the indirect-draw command signature cache was searched with the wrong key, so it never hit and every indirect draw created and kept a new command signature. In a loaded town the game grew by roughly 300-400 MB a minute, even while paused, until a 16 GB Mac ran out of memory. With the fix, memory stays flat.
+
 The build also raises Mesa's texture upload budget to 512 MB.
 
 `tests/repro.c` is a small standalone OpenGL program that reproduces the first two problems.
